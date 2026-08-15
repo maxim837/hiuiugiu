@@ -1,4 +1,4 @@
-const PRICE_STARS = 4; // цена в Stars
+const DEFAULT_PRICE_STARS = 4; // используется, только пока цена в базе ещё ни разу не задавалась
  
 module.exports = async (req, res) => {
   if (req.method !== 'POST') { res.status(200).send('ok'); return; }
@@ -24,8 +24,13 @@ module.exports = async (req, res) => {
         const current = await kvGet('free_mode');
         const newVal = current === 'true' ? 'false' : 'true';
         await kvSet('free_mode', newVal);
-        await editMessageReplyMarkup(chatId, cq.message.message_id, adminKeyboard(newVal === 'true'));
+        const price = await getPriceStars();
+        await editMessageReplyMarkup(chatId, cq.message.message_id, adminKeyboard(newVal === 'true', price));
         await answerCallbackQuery(cq.id, newVal === 'true' ? 'Бесплатный режим включён ✅' : 'Бесплатный режим выключен, доступ снова платный 🔒');
+      } else if (cq.data === 'change_price') {
+        await kvSet(`awaiting_price:${chatId}`, '1');
+        await answerCallbackQuery(cq.id);
+        await sendMessage(chatId, 'Введи новую цену в Stars одним числом (например: 999):');
       } else {
         await answerCallbackQuery(cq.id);
       }
@@ -40,6 +45,24 @@ module.exports = async (req, res) => {
     }
  
     const message = update.message;
+ 
+    // Если только что нажали "Изменить цену" — следующее текстовое сообщение от админа считаем новой ценой
+    if (message && message.text && isAdmin(String(message.chat.id))) {
+      const chatId = String(message.chat.id);
+      const awaiting = await kvGet(`awaiting_price:${chatId}`);
+      if (awaiting === '1') {
+        await kvDel(`awaiting_price:${chatId}`);
+        const text = message.text.trim();
+        if (/^\d+$/.test(text) && Number(text) > 0) {
+          await kvSet('price_stars', text);
+          await sendMessage(chatId, `Готово, новая цена: ${text} ⭐`);
+        } else {
+          await sendMessage(chatId, 'Это не похоже на число. Открой /admin и попробуй ещё раз.');
+        }
+        res.status(200).send('ok');
+        return;
+      }
+    }
  
     if (message && message.successful_payment) {
       const chatId = String(message.chat.id);
@@ -125,7 +148,8 @@ module.exports = async (req, res) => {
       if (!isAdmin(chatId)) { res.status(200).send('ok'); return; }
  
       const freeMode = (await kvGet('free_mode')) === 'true';
-      await sendMessage(chatId, 'Панель управления курсом:', adminKeyboard(freeMode));
+      const price = await getPriceStars();
+      await sendMessage(chatId, 'Панель управления курсом:', adminKeyboard(freeMode, price));
       res.status(200).send('ok');
       return;
     }
@@ -141,18 +165,30 @@ function isAdmin(chatId) {
   return admins.indexOf(chatId) !== -1;
 }
  
-function adminKeyboard(freeModeOn) {
+function adminKeyboard(freeModeOn, priceStars) {
   return {
-    inline_keyboard: [[
-      {
-        text: freeModeOn ? '✅ Бесплатный режим ВКЛ — нажми, чтобы вернуть оплату' : '🔒 Сейчас платно — нажми, чтобы включить бесплатный режим',
-        callback_data: 'toggle_free_mode',
-      },
-    ]],
+    inline_keyboard: [
+      [
+        {
+          text: freeModeOn ? '✅ Бесплатный режим ВКЛ — нажми, чтобы вернуть оплату' : '🔒 Сейчас платно — нажми, чтобы включить бесплатный режим',
+          callback_data: 'toggle_free_mode',
+        },
+      ],
+      [
+        { text: `💰 Изменить цену (сейчас ${priceStars} ⭐)`, callback_data: 'change_price' },
+      ],
+    ],
   };
 }
  
+async function getPriceStars() {
+  const v = await kvGet('price_stars');
+  const n = Number(v);
+  return v && n > 0 ? n : DEFAULT_PRICE_STARS;
+}
+ 
 async function sendInvoice(chatId) {
+  const priceStars = await getPriceStars();
   await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendInvoice`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -162,7 +198,7 @@ async function sendInvoice(chatId) {
       description: 'Полный курс подготовки: теория, 252 практических вопроса на трёх языках, пробный экзамен с таймером.',
       payload: 'csca-math-lifetime',
       currency: 'XTR',
-      prices: [{ label: 'Доступ навсегда', amount: PRICE_STARS }],
+      prices: [{ label: 'Доступ навсегда', amount: priceStars }],
     }),
   });
 }
@@ -208,6 +244,11 @@ async function kvGet(key) {
  
 async function kvSet(key, value) {
   const url = `${process.env.KV_REST_API_URL}/set/${key}/${encodeURIComponent(value)}`;
+  await fetch(url, { headers: { Authorization: `Bearer ${process.env.KV_REST_API_TOKEN}` } });
+}
+ 
+async function kvDel(key) {
+  const url = `${process.env.KV_REST_API_URL}/del/${key}`;
   await fetch(url, { headers: { Authorization: `Bearer ${process.env.KV_REST_API_TOKEN}` } });
 }
  
