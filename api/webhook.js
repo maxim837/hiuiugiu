@@ -1,23 +1,23 @@
-const PRICE_STARS = 2000; // ЗАМЕНИ на свою цену в Stars
-
+const PRICE_STARS = 2000; // цена в Stars
+ 
 module.exports = async (req, res) => {
   if (req.method !== 'POST') { res.status(200).send('ok'); return; }
-
+ 
   let update = req.body;
   if (typeof update === 'string') {
     try { update = JSON.parse(update); } catch (e) { update = {}; }
   }
   update = update || {};
-
+ 
   try {
     if (update.pre_checkout_query) {
       await answerPreCheckoutQuery(update.pre_checkout_query.id, true);
       res.status(200).send('ok');
       return;
     }
-
+ 
     const message = update.message;
-
+ 
     if (message && message.successful_payment) {
       const chatId = String(message.chat.id);
       await kvSadd('paid_users', chatId);
@@ -29,11 +29,11 @@ module.exports = async (req, res) => {
       res.status(200).send('ok');
       return;
     }
-
+ 
     if (message && message.text && message.text.indexOf('/start') === 0) {
       const chatId = String(message.chat.id);
       const paid = await kvSismember('paid_users', chatId);
-
+ 
       if (paid) {
         await sendMessage(
           chatId,
@@ -46,13 +46,59 @@ module.exports = async (req, res) => {
       res.status(200).send('ok');
       return;
     }
+ 
+    // Админ-команды — работают только из чатов, перечисленных в ADMIN_CHAT_ID (через запятую), у всех остальных молча игнорируются
+    if (message && message.text && message.text.indexOf('/grant') === 0) {
+      const chatId = String(message.chat.id);
+      if (!isAdmin(chatId)) { res.status(200).send('ok'); return; }
+ 
+      const targetId = message.text.trim().split(/\s+/)[1];
+      if (!targetId) {
+        await sendMessage(chatId, 'Использование: /grant <telegram_id>');
+      } else {
+        await kvSadd('paid_users', targetId);
+        await sendMessage(chatId, `Доступ выдан пользователю ${targetId} ✅`);
+      }
+      res.status(200).send('ok');
+      return;
+    }
+ 
+    if (message && message.text && message.text.indexOf('/revoke') === 0) {
+      const chatId = String(message.chat.id);
+      if (!isAdmin(chatId)) { res.status(200).send('ok'); return; }
+ 
+      const targetId = message.text.trim().split(/\s+/)[1];
+      if (!targetId) {
+        await sendMessage(chatId, 'Использование: /revoke <telegram_id>');
+      } else {
+        await kvSrem('paid_users', targetId);
+        await sendMessage(chatId, `Доступ у пользователя ${targetId} отозван ❌`);
+      }
+      res.status(200).send('ok');
+      return;
+    }
+ 
+    if (message && message.text && message.text.indexOf('/list') === 0) {
+      const chatId = String(message.chat.id);
+      if (!isAdmin(chatId)) { res.status(200).send('ok'); return; }
+ 
+      const members = await kvSmembers('paid_users');
+      await sendMessage(chatId, members.length ? `Сейчас доступ есть у:\n${members.join('\n')}` : 'Пока никто не оплатил.');
+      res.status(200).send('ok');
+      return;
+    }
   } catch (e) {
     console.error('webhook error', e);
   }
-
+ 
   res.status(200).send('ok');
 };
-
+ 
+function isAdmin(chatId) {
+  const admins = (process.env.ADMIN_CHAT_ID || '').split(',').map(s => s.trim()).filter(Boolean);
+  return admins.indexOf(chatId) !== -1;
+}
+ 
 async function sendInvoice(chatId) {
   await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendInvoice`, {
     method: 'POST',
@@ -67,7 +113,7 @@ async function sendInvoice(chatId) {
     }),
   });
 }
-
+ 
 async function answerPreCheckoutQuery(id, ok) {
   await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/answerPreCheckoutQuery`, {
     method: 'POST',
@@ -75,19 +121,31 @@ async function answerPreCheckoutQuery(id, ok) {
     body: JSON.stringify({ pre_checkout_query_id: id, ok }),
   });
 }
-
+ 
 async function kvSadd(key, member) {
   const url = `${process.env.KV_REST_API_URL}/sadd/${key}/${encodeURIComponent(member)}`;
   await fetch(url, { headers: { Authorization: `Bearer ${process.env.KV_REST_API_TOKEN}` } });
 }
-
+ 
 async function kvSismember(key, member) {
   const url = `${process.env.KV_REST_API_URL}/sismember/${key}/${encodeURIComponent(member)}`;
   const r = await fetch(url, { headers: { Authorization: `Bearer ${process.env.KV_REST_API_TOKEN}` } });
   const data = await r.json();
   return data.result === 1;
 }
-
+ 
+async function kvSrem(key, member) {
+  const url = `${process.env.KV_REST_API_URL}/srem/${key}/${encodeURIComponent(member)}`;
+  await fetch(url, { headers: { Authorization: `Bearer ${process.env.KV_REST_API_TOKEN}` } });
+}
+ 
+async function kvSmembers(key) {
+  const url = `${process.env.KV_REST_API_URL}/smembers/${key}`;
+  const r = await fetch(url, { headers: { Authorization: `Bearer ${process.env.KV_REST_API_TOKEN}` } });
+  const data = await r.json();
+  return data.result || [];
+}
+ 
 async function sendMessage(chatId, text, reply_markup) {
   await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
     method: 'POST',
