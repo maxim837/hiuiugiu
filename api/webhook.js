@@ -1,4 +1,4 @@
-const PRICE_STARS = 2000; // цена в Stars
+const PRICE_STARS = 4; // цена в Stars
  
 module.exports = async (req, res) => {
   if (req.method !== 'POST') { res.status(200).send('ok'); return; }
@@ -10,6 +10,29 @@ module.exports = async (req, res) => {
   update = update || {};
  
   try {
+    if (update.callback_query) {
+      const cq = update.callback_query;
+      const chatId = String(cq.message.chat.id);
+ 
+      if (!isAdmin(chatId)) {
+        await answerCallbackQuery(cq.id, 'Нет доступа');
+        res.status(200).send('ok');
+        return;
+      }
+ 
+      if (cq.data === 'toggle_free_mode') {
+        const current = await kvGet('free_mode');
+        const newVal = current === 'true' ? 'false' : 'true';
+        await kvSet('free_mode', newVal);
+        await editMessageReplyMarkup(chatId, cq.message.message_id, adminKeyboard(newVal === 'true'));
+        await answerCallbackQuery(cq.id, newVal === 'true' ? 'Бесплатный режим включён ✅' : 'Бесплатный режим выключен, доступ снова платный 🔒');
+      } else {
+        await answerCallbackQuery(cq.id);
+      }
+      res.status(200).send('ok');
+      return;
+    }
+ 
     if (update.pre_checkout_query) {
       await answerPreCheckoutQuery(update.pre_checkout_query.id, true);
       res.status(200).send('ok');
@@ -32,7 +55,8 @@ module.exports = async (req, res) => {
  
     if (message && message.text && message.text.indexOf('/start') === 0) {
       const chatId = String(message.chat.id);
-      const paid = await kvSismember('paid_users', chatId);
+      const freeMode = await kvGet('free_mode');
+      const paid = freeMode === 'true' ? true : await kvSismember('paid_users', chatId);
  
       if (paid) {
         await sendMessage(
@@ -87,6 +111,16 @@ module.exports = async (req, res) => {
       res.status(200).send('ok');
       return;
     }
+ 
+    if (message && message.text && message.text.indexOf('/admin') === 0) {
+      const chatId = String(message.chat.id);
+      if (!isAdmin(chatId)) { res.status(200).send('ok'); return; }
+ 
+      const freeMode = (await kvGet('free_mode')) === 'true';
+      await sendMessage(chatId, 'Панель управления курсом:', adminKeyboard(freeMode));
+      res.status(200).send('ok');
+      return;
+    }
   } catch (e) {
     console.error('webhook error', e);
   }
@@ -97,6 +131,17 @@ module.exports = async (req, res) => {
 function isAdmin(chatId) {
   const admins = (process.env.ADMIN_CHAT_ID || '').split(',').map(s => s.trim()).filter(Boolean);
   return admins.indexOf(chatId) !== -1;
+}
+ 
+function adminKeyboard(freeModeOn) {
+  return {
+    inline_keyboard: [[
+      {
+        text: freeModeOn ? '✅ Бесплатный режим ВКЛ — нажми, чтобы вернуть оплату' : '🔒 Сейчас платно — нажми, чтобы включить бесплатный режим',
+        callback_data: 'toggle_free_mode',
+      },
+    ]],
+  };
 }
  
 async function sendInvoice(chatId) {
@@ -146,10 +191,38 @@ async function kvSmembers(key) {
   return data.result || [];
 }
  
+async function kvGet(key) {
+  const url = `${process.env.KV_REST_API_URL}/get/${key}`;
+  const r = await fetch(url, { headers: { Authorization: `Bearer ${process.env.KV_REST_API_TOKEN}` } });
+  const data = await r.json();
+  return data.result;
+}
+ 
+async function kvSet(key, value) {
+  const url = `${process.env.KV_REST_API_URL}/set/${key}/${encodeURIComponent(value)}`;
+  await fetch(url, { headers: { Authorization: `Bearer ${process.env.KV_REST_API_TOKEN}` } });
+}
+ 
 async function sendMessage(chatId, text, reply_markup) {
   await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ chat_id: chatId, text, reply_markup }),
+  });
+}
+ 
+async function answerCallbackQuery(id, text) {
+  await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/answerCallbackQuery`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ callback_query_id: id, text: text || '', show_alert: false }),
+  });
+}
+ 
+async function editMessageReplyMarkup(chatId, messageId, reply_markup) {
+  await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/editMessageReplyMarkup`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: chatId, message_id: messageId, reply_markup }),
   });
 }
