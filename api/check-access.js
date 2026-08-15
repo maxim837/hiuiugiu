@@ -3,14 +3,14 @@ const crypto = require('crypto');
 module.exports = async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'method not allowed' }); return; }
  
-  // Бесплатный режим: пока идёт набор аудитории, курс открыт всем без оплаты.
-  // Чтобы включить платный доступ обратно — просто удали переменную FREE_MODE (или поставь false) в Vercel и сделай Redeploy.
-  if (process.env.FREE_MODE === 'true') {
-    res.status(200).json({ paid: true, valid: true });
-    return;
-  }
- 
   try {
+    // Бесплатный режим переключается прямо в боте кнопкой (/admin), без Vercel и редеплоя.
+    const freeMode = await kvGet('free_mode');
+    if (freeMode === 'true') {
+      res.status(200).json({ paid: true, valid: true });
+      return;
+    }
+ 
     let body = req.body;
     if (typeof body === 'string') {
       try { body = JSON.parse(body); } catch (e) { body = {}; }
@@ -74,3 +74,9 @@ async function kvSismember(key, member) {
   return data.result === 1;
 }
  
+async function kvGet(key) {
+  const url = `${process.env.KV_REST_API_URL}/get/${key}`;
+  const r = await fetch(url, { headers: { Authorization: `Bearer ${process.env.KV_REST_API_TOKEN}` } });
+  const data = await r.json();
+  return data.result;
+}
