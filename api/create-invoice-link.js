@@ -1,4 +1,4 @@
-const PRICE_STARS = 4; // ВАЖНО: держи то же число, что и в api/webhook.js
+const PRICE_STARS = 2000; // ВАЖНО: держи то же число, что и в api/webhook.js
 
 module.exports = async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'method not allowed' }); return; }
