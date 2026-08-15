@@ -107,7 +107,15 @@ module.exports = async (req, res) => {
       if (!isAdmin(chatId)) { res.status(200).send('ok'); return; }
  
       const members = await kvSmembers('paid_users');
-      await sendMessage(chatId, members.length ? `Сейчас доступ есть у:\n${members.join('\n')}` : 'Пока никто не оплатил.');
+      if (!members.length) {
+        await sendMessage(chatId, 'Пока никто не оплатил.');
+      } else {
+        const lines = await Promise.all(members.map(async (id) => {
+          const username = await getUsername(id);
+          return username ? `${id} — @${username}` : `${id} (без username)`;
+        }));
+        await sendMessage(chatId, `Сейчас доступ есть у:\n${lines.join('\n')}`);
+      }
       res.status(200).send('ok');
       return;
     }
@@ -219,6 +227,19 @@ async function answerCallbackQuery(id, text) {
   });
 }
  
+async function getUsername(chatId) {
+  try {
+    const r = await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/getChat?chat_id=${chatId}`);
+    const data = await r.json();
+    if (data.ok && data.result && data.result.username) {
+      return data.result.username;
+    }
+  } catch (e) {
+    console.error('getUsername error', e);
+  }
+  return null; // username не задан у пользователя, либо бот ещё не общался с этим chat_id
+}
+ 
 async function editMessageReplyMarkup(chatId, messageId, reply_markup) {
   await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/editMessageReplyMarkup`, {
     method: 'POST',
@@ -226,3 +247,4 @@ async function editMessageReplyMarkup(chatId, messageId, reply_markup) {
     body: JSON.stringify({ chat_id: chatId, message_id: messageId, reply_markup }),
   });
 }
+ 
