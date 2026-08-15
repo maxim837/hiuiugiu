@@ -1,4 +1,4 @@
-const PRICE_STARS = 4; // ЗАМЕНИ на свою цену в Stars
+const PRICE_STARS = 2000; // ЗАМЕНИ на свою цену в Stars
 
 module.exports = async (req, res) => {
   if (req.method !== 'POST') { res.status(200).send('ok'); return; }
